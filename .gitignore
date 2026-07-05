@@ -75,3 +75,13 @@ venv.bak/
 
 # Generated files
 src/galactoPINNs/_version.py
+
+# Claude session context + local docs (keep out of version control)
+CLAUDE.md
+docs/
+
+# Claude private scratch / verification dir (never committed)
+.claude-tmp/
+
+# Local reference PDFs (papers) — keep large binaries out of git history
+*.pdf
