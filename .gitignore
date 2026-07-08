@@ -85,3 +85,8 @@ docs/
 
 # Local reference PDFs (papers) — keep large binaries out of git history
 *.pdf
+
+# Local datasets
+data/
+*.npy
+*.npz
