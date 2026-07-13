@@ -2,6 +2,7 @@
 
 __all__ = (
     "bnn_performance",
+    "error_decomposition",
     "evaluate_performance",
     "evaluate_performance_node",
 )
@@ -17,11 +18,91 @@ from jaxtyping import Array
 from .inference import apply_model
 
 
+def error_decomposition(
+    true_vec: Array,
+    estimated_vec: Array,
+    n_vec: Array,
+    *,
+    eps: float = 1e-10,
+) -> dict[str, Array]:
+    """Decompose a vector error into line-of-sight and transverse components.
+
+    Given true and estimated vectors and a sightline direction ``n_vec``, splits
+    ``true_vec - estimated_vec`` into a signed LOS scalar and an orthogonal
+    transverse residual. Relative quantities are normalized by ``|true_vec|``.
+
+    Accepts a single vector of shape ``(3,)`` or a batch of shape ``(N, 3)``.
+    ``n_vec`` is normalized internally (need not be unit length).
+
+    Parameters
+    ----------
+    true_vec
+        Ground-truth vectors, shape ``(3,)`` or ``(N, 3)``.
+    estimated_vec
+        Estimated / predicted vectors, same shape as ``true_vec``.
+    n_vec
+        Line-of-sight direction(s), same shape convention as ``true_vec``.
+        Sightlines conventionally point observer -> evaluation point.
+    eps
+        Numerical floor for norms and relative denominators.
+
+    Returns
+    -------
+    dict
+        - ``"error_magnitude"``: ``|err|``
+        - ``"rel_error_magnitude"``: ``|err| / |true|``
+        - ``"los_error"``: ``|err · n̂|``
+        - ``"rel_los_error"``: ``|err · n̂| / |true|``
+        - ``"transverse_error"``: ``|err - (err · n̂) n̂|``
+        - ``"rel_transverse_error"``: transverse / ``|true|``
+
+        Absolute and relative LOS/transverse pairs satisfy Pythagoras:
+        ``|err|^2 = los^2 + transverse^2`` (and likewise for relatives).
+
+    """
+    true_vec = jnp.asarray(true_vec)
+    estimated_vec = jnp.asarray(estimated_vec)
+    n_vec = jnp.asarray(n_vec)
+
+    squeeze = true_vec.ndim == 1
+    if squeeze:
+        true_vec = true_vec[None, :]
+        estimated_vec = estimated_vec[None, :]
+        n_vec = n_vec[None, :]
+
+    n_hat = n_vec / (jnp.linalg.norm(n_vec, axis=1, keepdims=True) + eps)
+
+    err = true_vec - estimated_vec
+    error_magnitude = jnp.linalg.norm(err, axis=1)
+
+    los_signed = jnp.sum(err * n_hat, axis=1)
+    los_error = jnp.abs(los_signed)
+    transverse_error = jnp.linalg.norm(err - los_signed[:, None] * n_hat, axis=1)
+
+    true_mag = jnp.linalg.norm(true_vec, axis=1) + eps
+    rel_error_magnitude = error_magnitude / true_mag
+    rel_los_error = los_error / true_mag
+    rel_transverse_error = transverse_error / true_mag
+
+    out = {
+        "error_magnitude": error_magnitude,
+        "rel_error_magnitude": rel_error_magnitude,
+        "los_error": los_error,
+        "rel_los_error": rel_los_error,
+        "transverse_error": transverse_error,
+        "rel_transverse_error": rel_transverse_error,
+    }
+    if squeeze:
+        return {k: v[0] for k, v in out.items()}
+    return out
+
+
 def evaluate_performance(
     model: Any,
     raw_datadict: Mapping[str, Any],
     num_test: int,
     *,
+    observer: Array | None = None,
     gauge_correct: Literal["reference", "median"] | None = None,
     r_ref: float | None = None,
     eps: float = 1e-10,
@@ -49,6 +130,12 @@ def evaluate_performance(
         - "a_val": array-like, shape (N, 3), physical true acceleration
     num_test : int
         Number of validation samples to evaluate (uses the first `num_test` rows).
+    observer : array-like of shape (3,), optional
+        Observer position in physical coordinates (e.g. the Sun at
+        ``[-8.1, 0, 0]`` kpc). Sightlines point observer -> evaluation point.
+        When provided, also returns LOS/transverse acceleration percent errors
+        via :func:`error_decomposition`. When ``None`` (default), those keys
+        are ``None`` so existing callers remain unchanged.
     gauge_correct : {"reference", "median"} or None, optional
         Gauge correction method for potential errors:
         - None: no gauge correction (default)
@@ -83,6 +170,12 @@ def evaluate_performance(
         - "pot_percent_error": percent potential error, shape (num_test,)
           (gauge-corrected if `gauge_correct` is specified)
         - "acc_percent_error": percent acceleration error, shape (num_test,)
+        - "avg_percent_error": mean of ``acc_percent_error``
+        When ``observer`` is set:
+        - "acc_los_error", "acc_transverse_error": percent LOS/transverse
+          acceleration errors, shape (num_test,). Satisfy
+          ``acc_percent_error**2 ≈ acc_los_error**2 + acc_transverse_error**2``.
+        - "avg_los_error", "avg_transverse_error": means of the above
         If analytic baseline is enabled, then the trainable or fixed analytic potential/acceleration
         (depending on the specified model) is also evaluated:
         - "analytic_baseline": analytic baseline potential at t=0
@@ -126,6 +219,20 @@ def evaluate_performance(
         * jnp.linalg.norm(predicted_acc - true_acc, axis=1)
         / (jnp.linalg.norm(true_acc, axis=1) + eps)
     )
+
+    # --- Optional LOS / transverse acceleration decomposition ---
+    if observer is not None:
+        dx = x_val - jnp.asarray(observer)
+        decomp = error_decomposition(true_acc, predicted_acc, dx, eps=eps)
+        acc_los_error = 100.0 * decomp["rel_los_error"]
+        acc_transverse_error = 100.0 * decomp["rel_transverse_error"]
+        avg_los_error = jnp.mean(acc_los_error)
+        avg_transverse_error = jnp.mean(acc_transverse_error)
+    else:
+        acc_los_error = None
+        acc_transverse_error = None
+        avg_los_error = None
+        avg_transverse_error = None
 
     # --- Potential error (with optional gauge correction) ---
     if gauge_correct is None:
@@ -193,11 +300,15 @@ def evaluate_performance(
         "true_u": true_pot,
         "predicted_u": predicted_pot,
         "acc_percent_error": acc_percent_error,
+        "acc_los_error": acc_los_error,
+        "acc_transverse_error": acc_transverse_error,
         "pot_percent_error": pot_percent_error,
         "analytic_baseline": analytic_baseline_potential,
         "ab_pot_error": ab_pot_error,
         "ab_acc_error": ab_acc_error,
         "avg_percent_error": jnp.mean(acc_percent_error),
+        "avg_los_error": avg_los_error,
+        "avg_transverse_error": avg_transverse_error,
     }
 
 
