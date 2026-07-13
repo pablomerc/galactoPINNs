@@ -83,6 +83,9 @@ docs/
 # Claude private scratch / verification dir (never committed)
 .claude-tmp/
 
+# Experiments (local runs / generated outputs — keep out of version control)
+experiments/
+
 # Local reference PDFs (papers) — keep large binaries out of git history
 *.pdf
 
