@@ -85,6 +85,8 @@ def generate_observers_dataset(data_dict, observer_position=jnp.array([-8.2, 0.0
             "x_acc_val"    (M, 3)      - validation positions within r_accel_meas
             "a_acc_val"    (M, 3)      - corresponding validation accelerations
             "x_pos_val"    (K, 3)      - validation positions within r_pos_meas
+            "n_vecs"       (n_acc, 3)  - unit sightline directions for acceleration training points
+            "a_los"        (n_acc,)    - line-of-sight acceleration a·n̂ for acceleration training points
 
     Note:
         Validation sets are trimmed to the same heliocentric radii as training
@@ -92,8 +94,8 @@ def generate_observers_dataset(data_dict, observer_position=jnp.array([-8.2, 0.0
         in-distribution performance only, not extrapolation beyond the observed
         volume. Revisit if we want to evaluate generalization/extrapolation.
     Note:
-        A limitation of this is that we are not accounting for the selection effects 
-        of Gaia and real tracer distribution of stas and pulsars. 
+        A limitation of this is that we are not accounting for the selection effects
+        of Gaia and real tracer distribution of stas and pulsars.
         This is a first pass at generating a synthetic dataset for testing the PINN.
     """
     if key is None:
@@ -152,6 +154,14 @@ def generate_observers_dataset(data_dict, observer_position=jnp.array([-8.2, 0.0
     print(f'\nValidation: {x_acc_val.shape[0]:,} samples within {r_accel_meas} kpc, '
           f'{x_pos_val.shape[0]:,} samples within {r_pos_meas} kpc.')
 
+    proj = project_accelerations(
+        np.asarray(a_acc_train),
+        np.asarray(x_acc_train),
+        point_of_view=np.asarray(observer_position),
+    )
+    n_vecs = jnp.asarray(proj["n_vecs"])
+    a_los = jnp.asarray(proj["los_abs"])
+
     return {
         "x_acc_train": x_acc_train,
         "a_acc_train": a_acc_train,
@@ -159,4 +169,6 @@ def generate_observers_dataset(data_dict, observer_position=jnp.array([-8.2, 0.0
         "x_acc_val":   x_acc_val,
         "a_acc_val":   a_acc_val,
         "x_pos_val":   x_pos_val,
+        "n_vecs": n_vecs,
+        "a_los": a_los,
     }

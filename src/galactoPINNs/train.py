@@ -68,13 +68,15 @@ def get_model_params(model: nnx.Module) -> dict[str, Any]:
 #############
 
 
-@nnx.jit(static_argnames=("target", "ramp_kind", "balance_grads"))
+@nnx.jit(static_argnames=("target", "ramp_kind", "balance_grads", "line_of_sight"))
 def train_step_static(
     model: nnx.Module,
     optimizer: nnx.Optimizer,
     x: Array,
     a_true: Array,
     *,
+    n_vecs: Array | None = None,
+    line_of_sight: bool = False,
     lambda_rel: float = 1.0,
     importance_weight: Array | None = None,
     orbit_q: Array | None = None,
@@ -136,6 +138,12 @@ def train_step_static(
         Batch of input positions, shape ``(N, 3)`` (scaled coordinates).
     a_true
         True accelerations at ``x``, shape ``(N, 3)`` (scaled accelerations).
+    n_vecs
+        Unit sightline direction vectors, shape ``(N, 3)``. Required when
+        ``line_of_sight=True``.
+    line_of_sight
+        If ``True``, use the line-of-sight acceleration loss instead of the
+        full 3D acceleration loss.
     lambda_rel
         Weight for the relative-error term in the acceleration loss.
     importance_weight
@@ -181,6 +189,8 @@ def train_step_static(
     """
     if target != "acceleration" and (orbit_q is None or orbit_p is None):
         raise ValueError(f"target='{target}' requires orbit_q and orbit_p (got None).")
+    if line_of_sight and n_vecs is None:
+        raise ValueError("line_of_sight=True requires n_vecs (got None).")
 
     # ------------------------------------------------------------------
     # Training ramp helper
@@ -215,6 +225,18 @@ def train_step_static(
         true_norm = jnp.linalg.norm(a_true, axis=1)   # (N,)
         eps = 1e-10
         per_point = diff_norm + lambda_rel * (diff_norm / (true_norm + eps))
+        if importance_weight is not None:
+            return jnp.mean(importance_weight * per_point)
+        return jnp.mean(per_point)
+    
+    def _acc_los_loss(ts: nnx.State) -> Array:
+        m = nnx.merge(graphdef, ts, frozen_state)
+        a_pred = m(x)["acceleration"]          # (N, 3)
+        a_los_pred = jnp.sum(a_pred * n_vecs, axis=1) # (N,)
+        a_los_true = jnp.sum(a_true * n_vecs, axis=1) # (N,) # Note: for synthetic data we calculate the LOS acceleration from the true acceleration and the LOS vector, for real data we just have the LOS acceleration from the beginning
+        abs_err = jnp.abs(a_los_pred - a_los_true)  # (N,)
+        per_point = abs_err
+
         if importance_weight is not None:
             return jnp.mean(importance_weight * per_point)
         return jnp.mean(per_point)
@@ -253,7 +275,10 @@ def train_step_static(
     # Compute loss + gradients
     # ------------------------------------------------------------------
     if target == "acceleration":
-        loss, grads = nnx.value_and_grad(_acc_loss)(train_state)
+        if line_of_sight:
+            loss, grads = nnx.value_and_grad(_acc_los_loss)(train_state)
+        else:
+            loss, grads = nnx.value_and_grad(_acc_loss)(train_state)
 
     elif target == "orbit_energy":
         # Pure energy loss (no acceleration term)
@@ -451,6 +476,8 @@ def train_model_static(
     a_train: Array,
     num_epochs: int,
     *,
+    n_vecs: Array | None = None,
+    line_of_sight: bool = False,
     target: StaticTarget = "acceleration",
     log_every: int = 100,
     lambda_rel: float = 1.0,
@@ -489,6 +516,11 @@ def train_model_static(
         True accelerations at ``x_train``, shape ``(N, 3)`` in scaled units.
     num_epochs
         Total number of epochs to train if ``train_dict`` is not provided.
+    n_vecs
+        Unit sightline direction vectors for ``x_train``, shape ``(N, 3)``.
+        Required when ``line_of_sight=True``.
+    line_of_sight
+        If ``True``, use the line-of-sight acceleration loss. Default ``False``.
     target
         Default loss target when ``train_dict`` is not provided. One of
         ``"acceleration"``, ``"orbit_energy"``, ``"mixed"``, or
@@ -553,6 +585,8 @@ def train_model_static(
                 optimizer,
                 x_train,
                 a_train,
+                n_vecs=n_vecs,
+                line_of_sight=line_of_sight,
                 target=stage_target,
                 lambda_rel=lambda_rel,
                 orbit_q=orbit_q,
