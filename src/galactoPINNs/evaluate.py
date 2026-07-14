@@ -2,6 +2,7 @@
 
 __all__ = (
     "bnn_performance",
+    "cylindrical_error_decomposition",
     "error_decomposition",
     "evaluate_performance",
     "evaluate_performance_node",
@@ -97,6 +98,87 @@ def error_decomposition(
     return out
 
 
+def cylindrical_error_decomposition(
+    true_vec: Array,
+    estimated_vec: Array,
+    x: Array,
+    *,
+    eps: float = 1e-10,
+) -> dict[str, Array]:
+    """Decompose a vector error into galactocentric cylindrical components.
+
+    At each position ``x = (x, y, z)``, builds the local orthonormal frame
+    ``(e_R, e_phi, e_z)`` and projects ``true_vec - estimated_vec`` onto it.
+    Relative quantities are normalized by ``|true_vec|``.
+
+    Accepts a single sample of shape ``(3,)`` or a batch of shape ``(N, 3)``.
+    Near the z-axis (``R ≈ 0``), ``e_R`` / ``e_phi`` are stabilized with ``eps``.
+
+    Parameters
+    ----------
+    true_vec
+        Ground-truth vectors, shape ``(3,)`` or ``(N, 3)``.
+    estimated_vec
+        Estimated / predicted vectors, same shape as ``true_vec``.
+    x
+        Positions in Cartesian galactocentric coordinates, same shape.
+    eps
+        Numerical floor for cylindrical radius and relative denominators.
+
+    Returns
+    -------
+    dict
+        Absolute and relative component errors (all non-negative):
+
+        - ``"error_magnitude"``, ``"rel_error_magnitude"``
+        - ``"R_error"``, ``"rel_R_error"``
+        - ``"phi_error"``, ``"rel_phi_error"``
+        - ``"z_error"``, ``"rel_z_error"``
+
+        Because ``(e_R, e_phi, e_z)`` is orthonormal,
+        ``|err|^2 = R^2 + phi^2 + z^2`` (and likewise for relatives).
+
+    """
+    true_vec = jnp.asarray(true_vec)
+    estimated_vec = jnp.asarray(estimated_vec)
+    x = jnp.asarray(x)
+
+    squeeze = true_vec.ndim == 1
+    if squeeze:
+        true_vec = true_vec[None, :]
+        estimated_vec = estimated_vec[None, :]
+        x = x[None, :]
+
+    R = jnp.sqrt(x[:, 0] ** 2 + x[:, 1] ** 2)
+    R_safe = R + eps
+
+    e_R = jnp.stack([x[:, 0] / R_safe, x[:, 1] / R_safe, jnp.zeros_like(R)], axis=1)
+    e_phi = jnp.stack([-x[:, 1] / R_safe, x[:, 0] / R_safe, jnp.zeros_like(R)], axis=1)
+    e_z = jnp.array([0.0, 0.0, 1.0])
+
+    err = true_vec - estimated_vec
+    error_magnitude = jnp.linalg.norm(err, axis=1)
+
+    R_error = jnp.abs(jnp.sum(err * e_R, axis=1))
+    phi_error = jnp.abs(jnp.sum(err * e_phi, axis=1))
+    z_error = jnp.abs(jnp.sum(err * e_z[None, :], axis=1))
+
+    true_mag = jnp.linalg.norm(true_vec, axis=1) + eps
+    out = {
+        "error_magnitude": error_magnitude,
+        "rel_error_magnitude": error_magnitude / true_mag,
+        "R_error": R_error,
+        "rel_R_error": R_error / true_mag,
+        "phi_error": phi_error,
+        "rel_phi_error": phi_error / true_mag,
+        "z_error": z_error,
+        "rel_z_error": z_error / true_mag,
+    }
+    if squeeze:
+        return {k: v[0] for k, v in out.items()}
+    return out
+
+
 def evaluate_performance(
     model: Any,
     raw_datadict: Mapping[str, Any],
@@ -171,6 +253,10 @@ def evaluate_performance(
           (gauge-corrected if `gauge_correct` is specified)
         - "acc_percent_error": percent acceleration error, shape (num_test,)
         - "avg_percent_error": mean of ``acc_percent_error``
+        - "acc_R_error", "acc_phi_error", "acc_z_error": percent cylindrical
+          acceleration errors (always computed). Satisfy
+          ``acc_percent_error**2 ≈ acc_R_error**2 + acc_phi_error**2 + acc_z_error**2``.
+        - "avg_R_error", "avg_phi_error", "avg_z_error": means of the above
         When ``observer`` is set:
         - "acc_los_error", "acc_transverse_error": percent LOS/transverse
           acceleration errors, shape (num_test,). Satisfy
@@ -219,6 +305,15 @@ def evaluate_performance(
         * jnp.linalg.norm(predicted_acc - true_acc, axis=1)
         / (jnp.linalg.norm(true_acc, axis=1) + eps)
     )
+
+    # --- Cylindrical (R, phi, z) acceleration decomposition ---
+    cyl = cylindrical_error_decomposition(true_acc, predicted_acc, x_val, eps=eps)
+    acc_R_error = 100.0 * cyl["rel_R_error"]
+    acc_phi_error = 100.0 * cyl["rel_phi_error"]
+    acc_z_error = 100.0 * cyl["rel_z_error"]
+    avg_R_error = jnp.mean(acc_R_error)
+    avg_phi_error = jnp.mean(acc_phi_error)
+    avg_z_error = jnp.mean(acc_z_error)
 
     # --- Optional LOS / transverse acceleration decomposition ---
     if observer is not None:
@@ -300,6 +395,9 @@ def evaluate_performance(
         "true_u": true_pot,
         "predicted_u": predicted_pot,
         "acc_percent_error": acc_percent_error,
+        "acc_R_error": acc_R_error,
+        "acc_phi_error": acc_phi_error,
+        "acc_z_error": acc_z_error,
         "acc_los_error": acc_los_error,
         "acc_transverse_error": acc_transverse_error,
         "pot_percent_error": pot_percent_error,
@@ -307,6 +405,9 @@ def evaluate_performance(
         "ab_pot_error": ab_pot_error,
         "ab_acc_error": ab_acc_error,
         "avg_percent_error": jnp.mean(acc_percent_error),
+        "avg_R_error": avg_R_error,
+        "avg_phi_error": avg_phi_error,
+        "avg_z_error": avg_z_error,
         "avg_los_error": avg_los_error,
         "avg_transverse_error": avg_transverse_error,
     }
