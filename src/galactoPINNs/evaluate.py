@@ -1,6 +1,7 @@
 """Model evaluation utilities."""
 
 __all__ = (
+    "binned_error_profile",
     "bnn_performance",
     "cylindrical_error_decomposition",
     "error_decomposition",
@@ -14,6 +15,7 @@ from galactoPINNs.models.static_model import StaticModel
 
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from jaxtyping import Array
 
 from .inference import apply_model
@@ -179,6 +181,82 @@ def cylindrical_error_decomposition(
     return out
 
 
+def binned_error_profile(
+    distance: Array,
+    error: Array,
+    bins: int | Array = 20,
+) -> dict[str, Array]:
+    """Bin a per-point error against distance and summarize each bin.
+
+    Pure numeric helper for distance–error profiles (no plotting). Returns
+    per-bin median and 16th/84th percentiles so notebooks can draw a line +
+    band without reimplementing the aggregation.
+
+    Parameters
+    ----------
+    distance
+        Per-point distances, shape ``(N,)`` (e.g. ``d_sun`` or ``r_eval``).
+    error
+        Per-point error values, shape ``(N,)`` (e.g. ``acc_percent_error``).
+    bins
+        Number of equal-width bins over ``[min(distance), max(distance)]``,
+        or an explicit array of bin edges (length ``n_bins + 1``).
+
+    Returns
+    -------
+    dict
+        - ``"bin_edges"``: shape ``(n_bins + 1,)``
+        - ``"bin_centers"``: shape ``(n_bins,)``
+        - ``"median"``, ``"p16"``, ``"p84"``: shape ``(n_bins,)``; ``nan``
+          where a bin has no points
+        - ``"counts"``: number of points per bin, shape ``(n_bins,)``
+
+    """
+    distance = np.asarray(distance, dtype=float).ravel()
+    error = np.asarray(error, dtype=float).ravel()
+    if distance.shape != error.shape:
+        raise ValueError(
+            f"distance and error must have the same shape; got {distance.shape} vs {error.shape}"
+        )
+
+    if isinstance(bins, int):
+        if bins < 1:
+            raise ValueError(f"bins must be >= 1, got {bins}")
+        edges = np.linspace(distance.min(), distance.max(), bins + 1)
+    else:
+        edges = np.asarray(bins, dtype=float).ravel()
+        if edges.size < 2:
+            raise ValueError("bins edges array must have length >= 2")
+
+    n_bins = edges.size - 1
+    # Rightmost edge is inclusive so points at max(distance) land in the last bin.
+    idx = np.digitize(distance, edges[1:-1], right=False)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    median = np.full(n_bins, np.nan)
+    p16 = np.full(n_bins, np.nan)
+    p84 = np.full(n_bins, np.nan)
+    counts = np.zeros(n_bins, dtype=int)
+
+    for i in range(n_bins):
+        vals = error[idx == i]
+        counts[i] = vals.size
+        if vals.size == 0:
+            continue
+        median[i] = np.median(vals)
+        p16[i] = np.percentile(vals, 16)
+        p84[i] = np.percentile(vals, 84)
+
+    return {
+        "bin_edges": jnp.asarray(edges),
+        "bin_centers": jnp.asarray(centers),
+        "median": jnp.asarray(median),
+        "p16": jnp.asarray(p16),
+        "p84": jnp.asarray(p84),
+        "counts": jnp.asarray(counts),
+    }
+
+
 def evaluate_performance(
     model: Any,
     raw_datadict: Mapping[str, Any],
@@ -215,8 +293,9 @@ def evaluate_performance(
     observer : array-like of shape (3,), optional
         Observer position in physical coordinates (e.g. the Sun at
         ``[-8.1, 0, 0]`` kpc). Sightlines point observer -> evaluation point.
-        When provided, also returns LOS/transverse acceleration percent errors
-        via :func:`error_decomposition`. When ``None`` (default), those keys
+        When provided, also returns heliocentric distances ``d_sun`` and
+        LOS/transverse acceleration percent errors via
+        :func:`error_decomposition`. When ``None`` (default), those keys
         are ``None`` so existing callers remain unchanged.
     gauge_correct : {"reference", "median"} or None, optional
         Gauge correction method for potential errors:
@@ -258,6 +337,7 @@ def evaluate_performance(
           ``acc_percent_error**2 ≈ acc_R_error**2 + acc_phi_error**2 + acc_z_error**2``.
         - "avg_R_error", "avg_phi_error", "avg_z_error": means of the above
         When ``observer`` is set:
+        - "d_sun": heliocentric distance ``|x - observer|``, shape (num_test,)
         - "acc_los_error", "acc_transverse_error": percent LOS/transverse
           acceleration errors, shape (num_test,). Satisfy
           ``acc_percent_error**2 ≈ acc_los_error**2 + acc_transverse_error**2``.
@@ -318,12 +398,14 @@ def evaluate_performance(
     # --- Optional LOS / transverse acceleration decomposition ---
     if observer is not None:
         dx = x_val - jnp.asarray(observer)
+        d_sun = jnp.linalg.norm(dx, axis=1)
         decomp = error_decomposition(true_acc, predicted_acc, dx, eps=eps)
         acc_los_error = 100.0 * decomp["rel_los_error"]
         acc_transverse_error = 100.0 * decomp["rel_transverse_error"]
         avg_los_error = jnp.mean(acc_los_error)
         avg_transverse_error = jnp.mean(acc_transverse_error)
     else:
+        d_sun = None
         acc_los_error = None
         acc_transverse_error = None
         avg_los_error = None
@@ -389,6 +471,7 @@ def evaluate_performance(
 
     return {
         "r_eval": r_eval,
+        "d_sun": d_sun,
         "x_val": x_val,
         "true_a": true_acc,
         "predicted_a": predicted_acc,
