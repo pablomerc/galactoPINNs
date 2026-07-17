@@ -79,6 +79,9 @@ def train_step_static(
     line_of_sight: bool = False,
     lambda_rel: float = 1.0,
     importance_weight: Array | None = None,
+    anchor_x: Array | None = None,
+    anchor_a: Array | None = None,
+    lambda_anchor: float = 1.0,
     orbit_q: Array | None = None,
     orbit_p: Array | None = None,
     lambda_E: float = 5.0,
@@ -150,6 +153,15 @@ def train_step_static(
         Optional per-point weights, shape ``(N,)``. When provided, the
         acceleration loss becomes ``mean(importance_weight * per_point)``
         instead of ``mean(per_point)``. Has no effect on the orbit-energy loss.
+    anchor_x
+        Positions with known full 3D accelerations, shape ``(M, 3)`` (scaled
+        coordinates). Only supported when ``line_of_sight=True``.
+    anchor_a
+        True 3D accelerations at ``anchor_x``, shape ``(M, 3)`` (scaled units).
+    lambda_anchor
+        Weight of each anchor component inside the shared LOS+anchor mean, in
+        units of ordinary datapoints (``1.0`` = one anchor component counts
+        like one LOS residual).
     orbit_q
         Orbit positions over time, shape ``(B, T, 3)``.
         Required when ``target`` is not ``"acceleration"``.
@@ -191,7 +203,13 @@ def train_step_static(
         raise ValueError(f"target='{target}' requires orbit_q and orbit_p (got None).")
     if line_of_sight and n_vecs is None:
         raise ValueError("line_of_sight=True requires n_vecs (got None).")
-
+    if (anchor_x is None) != (anchor_a is None):
+        raise ValueError("anchor_x and anchor_a must be provided together.")
+    if anchor_x is not None and not line_of_sight:
+        raise ValueError(
+            "anchor points are only supported with line_of_sight=True; "
+            "with full 3D data, append them to x / a_true instead."
+        )
     # ------------------------------------------------------------------
     # Training ramp helper
     # ------------------------------------------------------------------
@@ -231,15 +249,22 @@ def train_step_static(
     
     def _acc_los_loss(ts: nnx.State) -> Array:
         m = nnx.merge(graphdef, ts, frozen_state)
-        a_pred = m(x)["acceleration"]          # (N, 3)
-        a_los_pred = jnp.sum(a_pred * n_vecs, axis=1) # (N,)
-        a_los_true = jnp.sum(a_true * n_vecs, axis=1) # (N,) # Note: for synthetic data we calculate the LOS acceleration from the true acceleration and the LOS vector, for real data we just have the LOS acceleration from the beginning
-        abs_err = jnp.abs(a_los_pred - a_los_true)  # (N,)
-        per_point = abs_err
-
+        a_pred = m(x)["acceleration"]                  # (N, 3)
+        a_los_pred = jnp.sum(a_pred * n_vecs, axis=1)  # (N,)
+        a_los_true = jnp.sum(a_true * n_vecs, axis=1)  # (N,) # Note: for synthetic data we calculate the LOS acceleration from the true acceleration and the LOS vector, for real data we just have the LOS acceleration from the beginning
+        per_point = jnp.abs(a_los_pred - a_los_true)   # (N,)
         if importance_weight is not None:
-            return jnp.mean(importance_weight * per_point)
-        return jnp.mean(per_point)
+            per_point = importance_weight * per_point
+
+        if anchor_x is None:
+            return jnp.mean(per_point)
+
+        a_anchor_pred = m(anchor_x)["acceleration"]                 # (M, 3)
+        anchor_abs = jnp.abs(a_anchor_pred - anchor_a).reshape(-1)  # (3M,)
+        return (jnp.sum(per_point) + lambda_anchor * jnp.sum(anchor_abs)) / (
+            per_point.size + anchor_abs.size
+        )
+
 
     def _orbit_energy(ts: nnx.State, oq: Array, op: Array) -> Array:
         """Return total specific energy E(t), shape ``(B, T)``."""
@@ -478,6 +503,9 @@ def train_model_static(
     *,
     n_vecs: Array | None = None,
     line_of_sight: bool = False,
+    anchor_x: Array | None = None,
+    anchor_a: Array | None = None,
+    lambda_anchor: float = 1.0,
     target: StaticTarget = "acceleration",
     log_every: int = 100,
     lambda_rel: float = 1.0,
@@ -521,6 +549,15 @@ def train_model_static(
         Required when ``line_of_sight=True``.
     line_of_sight
         If ``True``, use the line-of-sight acceleration loss. Default ``False``.
+    anchor_x
+        Positions with known full 3D accelerations, shape ``(M, 3)`` (scaled
+        coordinates). Only supported when ``line_of_sight=True``.
+    anchor_a
+        True 3D accelerations at ``anchor_x``, shape ``(M, 3)`` (scaled units).
+    lambda_anchor
+        Weight of each anchor component inside the shared LOS+anchor mean, in
+        units of ordinary datapoints (``1.0`` = one anchor component counts
+        like one LOS residual).
     target
         Default loss target when ``train_dict`` is not provided. One of
         ``"acceleration"``, ``"orbit_energy"``, ``"mixed"``, or
@@ -587,6 +624,9 @@ def train_model_static(
                 a_train,
                 n_vecs=n_vecs,
                 line_of_sight=line_of_sight,
+                anchor_x=anchor_x,
+                anchor_a=anchor_a,
+                lambda_anchor=lambda_anchor,
                 target=stage_target,
                 lambda_rel=lambda_rel,
                 orbit_q=orbit_q,
