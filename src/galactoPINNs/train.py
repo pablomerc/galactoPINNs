@@ -82,6 +82,8 @@ def train_step_static(
     anchor_x: Array | None = None,
     anchor_a: Array | None = None,
     lambda_anchor: float = 1.0,
+    colloc_x: Array | None = None,
+    lambda_rho: float = 1.0,
     orbit_q: Array | None = None,
     orbit_p: Array | None = None,
     lambda_E: float = 5.0,
@@ -162,6 +164,14 @@ def train_step_static(
         Weight of each anchor component inside the shared LOS+anchor mean, in
         units of ordinary datapoints (``1.0`` = one anchor component counts
         like one LOS residual).
+    colloc_x
+        Collocation points for the mass-positivity prior, shape ``(K, 3)``
+        (scaled coordinates). When provided, adds a one-sided hinge
+        ``lambda_rho * mean(relu(-laplacian))`` to the acceleration loss,
+        penalizing regions of negative implied density. Requires an
+        acceleration-based target.
+    lambda_rho
+        Weight of the positivity hinge relative to the data loss.
     orbit_q
         Orbit positions over time, shape ``(B, T, 3)``.
         Required when ``target`` is not ``"acceleration"``.
@@ -210,6 +220,9 @@ def train_step_static(
             "anchor points are only supported with line_of_sight=True; "
             "with full 3D data, append them to x / a_true instead."
         )
+    if colloc_x is not None and target == "orbit_energy":
+        raise ValueError("colloc_x requires an acceleration-based target.")
+
     # ------------------------------------------------------------------
     # Training ramp helper
     # ------------------------------------------------------------------
@@ -244,9 +257,15 @@ def train_step_static(
         eps = 1e-10
         per_point = diff_norm + lambda_rel * (diff_norm / (true_norm + eps))
         if importance_weight is not None:
-            return jnp.mean(importance_weight * per_point)
-        return jnp.mean(per_point)
-    
+            per_point = importance_weight * per_point
+        data_term = jnp.mean(per_point)
+
+        if colloc_x is None:
+            return data_term
+        lap = m.compute_laplacian(colloc_x)           # (K,) ∝ rho, scaled units
+        rho_pen = jnp.mean(jax.nn.relu(-lap))         # hinge, active iff rho < 0
+        return data_term + lambda_rho * rho_pen
+
     def _acc_los_loss(ts: nnx.State) -> Array:
         m = nnx.merge(graphdef, ts, frozen_state)
         a_pred = m(x)["acceleration"]                  # (N, 3)
@@ -257,13 +276,19 @@ def train_step_static(
             per_point = importance_weight * per_point
 
         if anchor_x is None:
-            return jnp.mean(per_point)
+            data_term = jnp.mean(per_point)
+        else:
+            a_anchor_pred = m(anchor_x)["acceleration"]                 # (M, 3)
+            anchor_abs = jnp.abs(a_anchor_pred - anchor_a).reshape(-1)  # (3M,)
+            data_term = (jnp.sum(per_point) + lambda_anchor * jnp.sum(anchor_abs)) / (
+                per_point.size + anchor_abs.size
+            )
 
-        a_anchor_pred = m(anchor_x)["acceleration"]                 # (M, 3)
-        anchor_abs = jnp.abs(a_anchor_pred - anchor_a).reshape(-1)  # (3M,)
-        return (jnp.sum(per_point) + lambda_anchor * jnp.sum(anchor_abs)) / (
-            per_point.size + anchor_abs.size
-        )
+        if colloc_x is None:
+            return data_term
+        lap = m.compute_laplacian(colloc_x)           # (K,) ∝ rho, scaled units
+        rho_pen = jnp.mean(jax.nn.relu(-lap))         # hinge, active iff rho < 0
+        return data_term + lambda_rho * rho_pen
 
 
     def _orbit_energy(ts: nnx.State, oq: Array, op: Array) -> Array:
@@ -506,6 +531,8 @@ def train_model_static(
     anchor_x: Array | None = None,
     anchor_a: Array | None = None,
     lambda_anchor: float = 1.0,
+    colloc_x: Array | None = None,
+    lambda_rho: float = 1.0,
     target: StaticTarget = "acceleration",
     log_every: int = 100,
     lambda_rel: float = 1.0,
@@ -558,6 +585,14 @@ def train_model_static(
         Weight of each anchor component inside the shared LOS+anchor mean, in
         units of ordinary datapoints (``1.0`` = one anchor component counts
         like one LOS residual).
+    colloc_x
+        Collocation points for the mass-positivity prior, shape ``(K, 3)``
+        (scaled coordinates). When provided, adds a one-sided hinge
+        ``lambda_rho * mean(relu(-laplacian))`` to the acceleration loss,
+        penalizing regions of negative implied density. Requires an
+        acceleration-based target.
+    lambda_rho
+        Weight of the positivity hinge relative to the data loss.
     target
         Default loss target when ``train_dict`` is not provided. One of
         ``"acceleration"``, ``"orbit_energy"``, ``"mixed"``, or
@@ -627,6 +662,8 @@ def train_model_static(
                 anchor_x=anchor_x,
                 anchor_a=anchor_a,
                 lambda_anchor=lambda_anchor,
+                colloc_x=colloc_x,
+                lambda_rho=lambda_rho,
                 target=stage_target,
                 lambda_rel=lambda_rel,
                 orbit_q=orbit_q,
