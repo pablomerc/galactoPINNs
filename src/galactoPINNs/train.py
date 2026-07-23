@@ -68,7 +68,7 @@ def get_model_params(model: nnx.Module) -> dict[str, Any]:
 #############
 
 
-@nnx.jit(static_argnames=("target", "ramp_kind", "balance_grads", "line_of_sight"))
+@nnx.jit(static_argnames=("target", "ramp_kind", "balance_grads", "line_of_sight", "los_loss"))
 def train_step_static(
     model: nnx.Module,
     optimizer: nnx.Optimizer,
@@ -77,6 +77,7 @@ def train_step_static(
     *,
     n_vecs: Array | None = None,
     line_of_sight: bool = False,
+    los_loss: Literal["l1", "sq"] = "l1",
     lambda_rel: float = 1.0,
     importance_weight: Array | None = None,
     anchor_x: Array | None = None,
@@ -149,12 +150,23 @@ def train_step_static(
     line_of_sight
         If ``True``, use the line-of-sight acceleration loss instead of the
         full 3D acceleration loss.
+    los_loss
+        Residual form of the per-point LOS data term only — not a weighting
+        mode. ``"l1"`` (default) uses ``|r|`` (median regression); ``"sq"``
+        uses ``r²``. Requires ``line_of_sight=True``. Anchor residuals use the
+        same form so both terms share units inside the common mean. Typical
+        compositions with ``importance_weight``: plain =
+        ``("l1", None)``; whitened L1 = ``("l1", w ∝ 1/σ)``; whitened χ² =
+        ``("sq", w ∝ 1/σ²)``. Match the weight power to the residual: ``1/σ``
+        with ``"l1"``, ``1/σ²`` with ``"sq"``.
     lambda_rel
         Weight for the relative-error term in the acceleration loss.
     importance_weight
         Optional per-point weights, shape ``(N,)``. When provided, the
         acceleration loss becomes ``mean(importance_weight * per_point)``
         instead of ``mean(per_point)``. Has no effect on the orbit-energy loss.
+        For heteroscedastic LOS noise, pass mean-normalized ``w ∝ 1/σ`` with
+        ``los_loss="l1"``, or ``w ∝ 1/σ²`` with ``los_loss="sq"``.
     anchor_x
         Positions with known full 3D accelerations, shape ``(M, 3)`` (scaled
         coordinates). Only supported when ``line_of_sight=True``.
@@ -213,6 +225,10 @@ def train_step_static(
         raise ValueError(f"target='{target}' requires orbit_q and orbit_p (got None).")
     if line_of_sight and n_vecs is None:
         raise ValueError("line_of_sight=True requires n_vecs (got None).")
+    if los_loss not in ("l1", "sq"):
+        raise ValueError(f"unknown los_loss '{los_loss}' (use 'l1' or 'sq').")
+    if los_loss != "l1" and not line_of_sight:
+        raise ValueError("los_loss='sq' modifies the line-of-sight loss; it requires line_of_sight=True.")
     if (anchor_x is None) != (anchor_a is None):
         raise ValueError("anchor_x and anchor_a must be provided together.")
     if anchor_x is not None and not line_of_sight:
@@ -271,7 +287,8 @@ def train_step_static(
         a_pred = m(x)["acceleration"]                  # (N, 3)
         a_los_pred = jnp.sum(a_pred * n_vecs, axis=1)  # (N,)
         a_los_true = jnp.sum(a_true * n_vecs, axis=1)  # (N,) # Note: for synthetic data we calculate the LOS acceleration from the true acceleration and the LOS vector, for real data we just have the LOS acceleration from the beginning
-        per_point = jnp.abs(a_los_pred - a_los_true)   # (N,)
+        resid = a_los_pred - a_los_true                # (N,)
+        per_point = jnp.abs(resid) if los_loss == "l1" else resid**2
         if importance_weight is not None:
             per_point = importance_weight * per_point
 
@@ -279,7 +296,8 @@ def train_step_static(
             data_term = jnp.mean(per_point)
         else:
             a_anchor_pred = m(anchor_x)["acceleration"]                 # (M, 3)
-            anchor_abs = jnp.abs(a_anchor_pred - anchor_a).reshape(-1)  # (3M,)
+            anchor_res = (a_anchor_pred - anchor_a).reshape(-1)         # (3M,)
+            anchor_abs = jnp.abs(anchor_res) if los_loss == "l1" else anchor_res**2
             data_term = (jnp.sum(per_point) + lambda_anchor * jnp.sum(anchor_abs)) / (
                 per_point.size + anchor_abs.size
             )
@@ -528,6 +546,8 @@ def train_model_static(
     *,
     n_vecs: Array | None = None,
     line_of_sight: bool = False,
+    los_loss: Literal["l1", "sq"] = "l1",
+    importance_weight: Array | None = None,
     anchor_x: Array | None = None,
     anchor_a: Array | None = None,
     lambda_anchor: float = 1.0,
@@ -576,6 +596,21 @@ def train_model_static(
         Required when ``line_of_sight=True``.
     line_of_sight
         If ``True``, use the line-of-sight acceleration loss. Default ``False``.
+    los_loss
+        Residual form of the per-point LOS data term only — not a weighting
+        mode. ``"l1"`` (default) uses ``|r|`` (median regression); ``"sq"``
+        uses ``r²``. Requires ``line_of_sight=True``. Anchor residuals use the
+        same form so both terms share units inside the common mean. Typical
+        compositions with ``importance_weight``: plain =
+        ``("l1", None)``; whitened L1 = ``("l1", w ∝ 1/σ)``; whitened χ² =
+        ``("sq", w ∝ 1/σ²)``. Match the weight power to the residual: ``1/σ``
+        with ``"l1"``, ``1/σ²`` with ``"sq"``.
+    importance_weight
+        Optional per-point weights, shape ``(N,)``. When provided, the
+        acceleration loss becomes ``mean(importance_weight * per_point)``
+        instead of ``mean(per_point)``. Has no effect on the orbit-energy loss.
+        For heteroscedastic LOS noise, pass mean-normalized ``w ∝ 1/σ`` with
+        ``los_loss="l1"``, or ``w ∝ 1/σ²`` with ``los_loss="sq"``.
     anchor_x
         Positions with known full 3D accelerations, shape ``(M, 3)`` (scaled
         coordinates). Only supported when ``line_of_sight=True``.
@@ -659,6 +694,8 @@ def train_model_static(
                 a_train,
                 n_vecs=n_vecs,
                 line_of_sight=line_of_sight,
+                los_loss=los_loss,
+                importance_weight=importance_weight,
                 anchor_x=anchor_x,
                 anchor_a=anchor_a,
                 lambda_anchor=lambda_anchor,
