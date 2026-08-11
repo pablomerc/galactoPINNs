@@ -1079,7 +1079,10 @@ def scale_data(
 
     r_s = float(config["r_s"])  # kpc
 
-    if config.get("include_analytic", False):
+    override = config.get("u_star_override", None)
+    if override is not None:
+        u_star = float(override)
+    elif config.get("include_analytic", False):
         lf_potential = config["ab_potential"]
         pos = cx.CartesianPos3D(
             x=u.Quantity(data_dict["x_train"][:, 0], "kpc"),
