@@ -17,6 +17,10 @@ dependencies = [
   "numpyro>=0.19.0",
   "flax>=0.12.2",
   "jax>=0.8.2",
+  "gizmo-analysis>=1.0.5",
+  "utilities-awetzel>=1.0.4",
+  "pytreegrav==1.1.4",
+  "numba>=0.66.0",
 ]
 description = "Physics-informed neural networks for modeling galactic gravitational potentials."
 dynamic = ["version"]
