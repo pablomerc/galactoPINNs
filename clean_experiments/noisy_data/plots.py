@@ -29,7 +29,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import ScalarFormatter
+from matplotlib.ticker import MultipleLocator, NullLocator, ScalarFormatter
 
 MODES = ("LOS", "LOS+Sun+rho")
 REGIONS = ("sun4", "sun15", "gc15")
@@ -147,6 +147,7 @@ def plot_vs_n_by_setting(rows, settings, fname, suptitle, outdir,
     for i, mode in enumerate(MODES):
         for j, region in enumerate(REGIONS):
             ax = axes[i, j]
+            ymax = 0.0
             for s in settings:
                 mean = np.array([agg(rows, "rel_err", region=region, n=n,
                                      mode=mode, setting=s)[0]
@@ -159,13 +160,22 @@ def plot_vs_n_by_setting(rows, settings, fname, suptitle, outdir,
                             fmt=SETTING_MARKERS[s] + ls,
                             label=SETTING_LABELS[s], **{k: v for k, v in
                             style_kw(s).items() if k != "marker"})
+                top = mean + np.where(np.isfinite(std), std, 0.0)
+                if np.any(np.isfinite(top)):
+                    ymax = max(ymax, float(np.nanmax(top)))
             ax.set_xscale("log")
             ax.set_xticks(n_grid)
             ax.xaxis.set_major_formatter(ScalarFormatter())
             ax.minorticks_off()
             ax.grid(True, alpha=0.3)
+            # errorbar artists corrupt the log-x autoscale (left limit
+            # collapses, cramming data to the right) and inflate the y-top;
+            # pin both axes to the data explicitly instead.
+            ax.set_xlim(n_grid[0] / 1.2, n_grid[-1] * 1.2)
             if ylims is not None and region in ylims:
                 ax.set_ylim(*ylims[region])
+            elif ymax > 0:
+                ax.set_ylim(0.0, ymax * 1.08)
             else:
                 ax.set_ylim(bottom=0)
             if i == 0:
@@ -176,6 +186,50 @@ def plot_vs_n_by_setting(rows, settings, fname, suptitle, outdir,
                 ax.set_ylabel(f"{mode}\nrecovery error [%]")
     axes[0, 0].legend(fontsize=7)
     fig.suptitle(suptitle, fontsize=11)
+    fig.tight_layout()
+    out = os.path.join(outdir, fname)
+    fig.savefig(out, dpi=140)
+    plt.close(fig)
+    print("saved", out)
+
+
+def plot_arms_sun4(rows, settings, outdir, ylim=(0.0, 50.0),
+                   fname="recovery_vs_n_arms_sun4.png"):
+    """Zoomed r<4kpc-only arms view: two mode panels, capped y, fine grid."""
+    n_grid = sorted({r["n"] for r in rows})
+    region = "sun4"
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 5.4),
+                             sharex=True, sharey=True)
+    for ax, mode in zip(axes, MODES):
+        for s in settings:
+            mean = np.array([agg(rows, "rel_err", region=region, n=n,
+                                 mode=mode, setting=s)[0]
+                             for n in n_grid]) * 100.0
+            std = np.array([agg(rows, "rel_err", region=region, n=n,
+                                mode=mode, setting=s)[1]
+                            for n in n_grid]) * 100.0
+            ls = ":" if s in CHI2_SETTINGS else "-"
+            ax.errorbar(n_grid, mean, yerr=std,
+                        fmt=SETTING_MARKERS[s] + ls,
+                        label=SETTING_LABELS[s], **{k: v for k, v in
+                        style_kw(s).items() if k != "marker"})
+        ax.set_xscale("log")
+        ax.set_xticks(n_grid)
+        ax.xaxis.set_major_formatter(ScalarFormatter())
+        ax.xaxis.set_minor_locator(NullLocator())  # no log minor ticks on x
+        ax.set_xlim(n_grid[0] / 1.2, n_grid[-1] * 1.2)
+        ax.set_ylim(*ylim)
+        # fine grid: majors every 10, minors every 2.5 on y
+        ax.yaxis.set_major_locator(MultipleLocator(10))
+        ax.yaxis.set_minor_locator(MultipleLocator(2.5))
+        ax.grid(True, which="major", alpha=0.4)
+        ax.grid(True, which="minor", axis="y", alpha=0.18)
+        ax.set_title(mode, fontsize=11)
+        ax.set_xlabel("n_samples (LOS training measurements)")
+    axes[0].set_ylabel("recovery error [%]")
+    axes[0].legend(fontsize=7, loc="upper right")
+    fig.suptitle("Catalog-noise arms, r < 4 kpc of Sun (training region)",
+                 fontsize=11)
     fig.tight_layout()
     out = os.path.join(outdir, fname)
     fig.savefig(out, dpi=140)
@@ -266,6 +320,8 @@ def main():
                   "(shared noise realizations within each family)"),
         outdir=args.outdir,
     )
+
+    plot_arms_sun4(rows, arm_settings, args.outdir)
 
     plot_calibration(rows, args.outdir)
 
