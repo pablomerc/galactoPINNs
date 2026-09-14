@@ -143,7 +143,7 @@ def six_panel(cat, pool, sel, rs, r_ball, sim, tag, idx_draw, out):
         (r"$r_\odot$ [kpc]", r"$p(r_\odot)$ [kpc$^{-1}$]", cat["r"], pool["r"], r_sel, p_uni,
          rg, np.linspace(0, 4.5, 16), None, None, 1.5),
         (r"Galactic longitude $\ell$ [deg]  (0 = Galactic centre)", r"$p(\ell)$ [deg$^{-1}$]",
-         cat["l"], pool["l"], l_sel, p_l_uni, lg, np.linspace(-180, 180, 19), 360.0, [-180, -90, 0, 90, 180], 1.2),
+         cat["l"], pool["l"], l_sel, p_l_uni, lg, np.linspace(-180, 180, 19), 360.0, [-180, -90, 0, 90, 180], 1.75),  # room for the inset
         (r"Galactic latitude $b$ [deg]", r"$p(b)$ [deg$^{-1}$]", cat["b"], pool["b"], b_sel, p_b_uni,
          bg, np.linspace(-90, 90, 13), None, [-90, -45, 0, 45, 90], 1.2),
     ]
@@ -165,6 +165,24 @@ def six_panel(cat, pool, sel, rs, r_ball, sim, tag, idx_draw, out):
             if xt is not None: ax.set_xticks(xt)
         axA.set_ylabel(yl)
         axA.set_ylim(0, head * max(p_c.max(), p_u.max(), p_s.max()))
+    # middle-right inset: the folded longitude |l| on [0, 180]. p(|l|) = p(l) + p(-l), so the
+    # periodic KDEs fold exactly; the catalog's first-quadrant excess (a telescope footprint)
+    # averages out and the rejection sample can be compared with the catalog directly.
+    axins = axes[1, 1].inset_axes([0.05, 0.50, 0.40, 0.46])
+    pos = lg >= 0
+    fold = lambda p: p[pos] + p[::-1][pos]                    # lg symmetric -> p[::-1] is p(-l)  # noqa: E731
+    p_c_l, p_s_l = kde(cat["l"], lg, 360.0), kde(l_sel, lg, 360.0)
+    axins.hist(np.abs(cat["l"]), bins=np.linspace(0, 180, 10), color=C_CAT, edgecolor=C_CAT, **HIST)
+    axins.hist(np.abs(l_sel), bins=np.linspace(0, 180, 10), color=C_SEL, edgecolor=C_SEL, **HIST)
+    axins.plot(lg[pos], fold(p_c_l), color=C_CAT, lw=1.4)
+    axins.plot(lg[pos], fold(p_s_l), color=C_SEL, lw=1.4)
+    axins.axhline(1 / 180, color=C_REF, ls="--", lw=1.0)
+    axins.set_xlim(0, 180); axins.set_xticks([0, 90, 180]); axins.set_yticks([])
+    axins.set_xlabel(r"folded  $|\ell|$ [deg]", fontsize=7, labelpad=1)
+    axins.tick_params(labelsize=6, length=2)
+    axins.text(0.96, 0.94, r"$|\ell|<90^\circ$" + "\n%.2f catalog\n%.2f mock"
+               % (np.mean(np.abs(cat["l"]) < 90), np.mean(np.abs(l_sel) < 90)),
+               transform=axins.transAxes, ha="right", va="top", fontsize=6, linespacing=1.3)
     far = cat["r"] > 4.5
     if far.any():
         axes[0, 0].annotate(f"{far.sum()} pulsars at\n{cat['r'][far].min():.1f}--{cat['r'][far].max():.0f} kpc "
@@ -183,7 +201,7 @@ def six_panel(cat, pool, sel, rs, r_ball, sim, tag, idx_draw, out):
     axes[0, 1].set_title(rf"(B)  after rejection sampling with $S(r_\odot)$, $r_s$ {tag}", fontsize=9)
     axes[0, 0].legend(frameon=True, fontsize=7, loc="upper right")
     hB, lB = axes[0, 1].get_legend_handles_labels(); hS, lS = axS.get_legend_handles_labels()
-    axes[0, 1].legend(hB + hS, lB + lS, frameon=True, fontsize=7, loc="upper center")
+    axes[0, 1].legend(hB + hS, lB + lS, frameon=True, fontsize=7, loc="upper right")
     fig.tight_layout()
     out.parent.mkdir(exist_ok=True)
     fig.savefig(out.with_suffix(".pdf")); fig.savefig(out.with_suffix(".png"), dpi=170)
