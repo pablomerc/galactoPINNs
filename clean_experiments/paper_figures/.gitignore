@@ -1,0 +1,4 @@
+# per-simulation old-star caches (rebuilt by sampling_suite.py / sky_selection_suite.py)
+cache/
+# slurm logs
+*.out
