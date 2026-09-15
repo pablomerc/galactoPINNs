@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Joint distance + on-sky selection of FIRE mock pulsars, one simulation at a time.
 
-Extends sampling_suite.py with the declination selection S(delta) of sky_selection.py:
+Extends ../sampling_suite.py with the declination selection S(delta) of selection.py:
 
     candidates  old stars (age > --age-min) within --r-cand of the observer (same cache as
-                sampling_suite.py: cache/<sim>_oldstars_r<r-cand>_age<age-min>.npz)
+                sampling_suite.py: ../cache/<sim>_oldstars_r<r-cand>_age<age-min>.npz)
     S(r)        keep star i with probability exp(-r_i / r_s)              (seed --seed)
     S(delta)    keep star i with probability S(delta_i), for each weighting in --weights,
                 with ONE shared uniform draw (seed --seed + 1) so the samples are nested;
@@ -16,15 +16,15 @@ Outputs (per simulation)
                                              S(r) S(delta); 50% / 90% mass contours
     results/<sim>_sky_selection_stats.json   acceptance, quadrant fractions, |l| < 90, median |b|,
                                              share per declination band, for every sample
-    results/<sim>_sky_samples.npz            (l, b) of the mock samples, for sky_selection_summary.py
+    results/<sim>_sky_samples.npz            (l, b) of the mock samples, for summary.py
 
 The simulation frame fixes |z| and the disk plane but not the sense of rotation or which side
 is north; S(delta) is symmetric in neither l nor b, so --flip {l,b,lb} mirrors the mock before
 computing delta to test that dependence (filenames get a _flip-<x> suffix).
 
 Example
-    python sky_selection_suite.py --sim m12f --fire-dir /data/fire/m12f_res7100 --catalog /data/pulsars/data.csv
-    python sky_selection_suite.py --sim m12i --catalog /data/pulsars/data.csv        # cache already built
+    python suite.py --sim m12f --fire-dir /data/fire/m12f_res7100 --catalog /data/pulsars/data.csv
+    python suite.py --sim m12i --catalog /data/pulsars/data.csv        # cache already built
 """
 from __future__ import annotations
 
@@ -50,9 +50,10 @@ except Exception:  # noqa: BLE001
 plt.rcParams["figure.dpi"] = 150
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE))          # selection.py
+sys.path.insert(0, str(HERE.parent))   # ../sampling_suite.py (candidate cache, catalog, geometry)
 from sampling_suite import OBSERVER, PAPER_PALETTE, candidates, heliocentric_lb, load_catalog  # noqa: E402
-from sky_selection import BAND_EDGES, REFS_CSV, SkySelection, arecibo_strip, declination  # noqa: E402
+from selection import BAND_EDGES, REFS_CSV, SkySelection, arecibo_strip, declination  # noqa: E402
 
 C_CAT, C_SIM, C_SKY, C_SEL, C_CNT, C_REF = (PAPER_PALETTE[0], PAPER_PALETTE[1], PAPER_PALETTE[2],
                                             PAPER_PALETTE[3], PAPER_PALETTE[4], "0.45")
@@ -159,7 +160,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sim", required=True, help="label, e.g. m12i")
     ap.add_argument("--catalog", required=True, type=Path, help="Donlon+2025 data.csv (distances)")
-    ap.add_argument("--refs", type=Path, default=REFS_CSV, help="per-pulsar program table (sky_coverage/donlon52_refs.csv)")
+    ap.add_argument("--refs", type=Path, default=REFS_CSV, help="per-pulsar program table (../sky_coverage/donlon52_refs.csv)")
     ap.add_argument("--fire-dir", type=Path, help="simulation directory (read with gizmo_analysis); not needed if the cache exists")
     ap.add_argument("--particles", type=Path, help="a fire_truth.py 'prepare' table instead of a snapshot")
     ap.add_argument("--snapshot", type=int, default=600)

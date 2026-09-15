@@ -25,13 +25,13 @@ Contributors (the NANOGrav pulsars are split by whether Arecibo could see them):
     Other                   all sky       (dedicated timing studies, various dishes)
 
 The program behind each pulsar is the ATNF reference tag on its acceleration channel
-(sky_coverage/donlon52_refs.csv, built by sky_coverage/atnf_refs.py) mapped through
-sky_coverage/programs.py.  Declinations are J2000, from Galactic (l, b) by the standard
+(../sky_coverage/donlon52_refs.csv, built by ../sky_coverage/atnf_refs.py) mapped through
+../sky_coverage/programs.py.  Declinations are J2000, from Galactic (l, b) by the standard
 rotation (agrees with astropy to 0.02 arcsec; no astropy dependency).
 
 Run as a script to print the contributor table and S(delta) per declination band:
 
-    python sky_selection.py                      # uses sky_coverage/donlon52_refs.csv
+    python selection.py                          # uses ../sky_coverage/donlon52_refs.csv
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from pathlib import Path
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
-REFS_CSV = HERE / "sky_coverage" / "donlon52_refs.csv"
+REFS_CSV = HERE.parent / "sky_coverage" / "donlon52_refs.csv"
 
 # telescope limits [deg]; see sky_coverage/accessible_sky.py for the sources
 DEC_GBT, DEC_NANCAY, DEC_ARECIBO_LO, DEC_PARKES, DEC_ARECIBO_HI = -46.0, -39.0, -1.0, 27.0, 38.0
@@ -184,7 +184,7 @@ class SkySelection:
 if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--refs", type=Path, default=REFS_CSV, help="sky_coverage/donlon52_refs.csv")
+    ap.add_argument("--refs", type=Path, default=REFS_CSV, help="../sky_coverage/donlon52_refs.csv")
     a = ap.parse_args()
     df = load_pulsars(a.refs)
     sel = SkySelection(df["region"].value_counts().to_dict())

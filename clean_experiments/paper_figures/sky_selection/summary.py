@@ -2,13 +2,13 @@
 """Suite overview of the sky selection: one row per simulation, one column per mock sample.
 
 Reads results/<sim>_sky_samples.npz and results/<sim>_sky_selection_stats.json written by
-sky_selection_suite.py and draws the sky density p(l, b) of the S(r) sample and of the joint
+suite.py and draws the sky density p(l, b) of the S(r) sample and of the joint
 S(r) S(delta) samples (rate and/or count weights), with the 52 catalog pulsars as dots and
 black 50% / 90% mass contours.  Also prints the sky statistics of every sample against the
 catalog.
 
-    python sky_selection_summary.py                       # every simulation with results
-    python sky_selection_summary.py --sims m12i m12f --weights rate
+    python summary.py                       # every simulation with results
+    python summary.py --sims m12i m12f --weights rate
 
 Output: figs/suite_sky2d[_<suffix>].{pdf,png}
 """
@@ -33,7 +33,7 @@ plt.rcParams["figure.dpi"] = 150
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from sky_selection_suite import C_CAT, C_SEL, JOINT_COLOR, draw_density_panel  # noqa: E402
+from suite import C_CAT, C_SEL, JOINT_COLOR, draw_density_panel  # noqa: E402
 
 
 def main():
@@ -47,7 +47,7 @@ def main():
     res = HERE / "results"
     sims = args.sims or sorted(p.name.split("_sky_samples")[0] for p in res.glob(f"*_sky_samples{args.suffix}.npz"))
     if not sims:
-        raise SystemExit("no results/<sim>_sky_samples.npz found; run sky_selection_suite.py first")
+        raise SystemExit("no results/<sim>_sky_samples.npz found; run suite.py first")
     cols = [("S_r", r"$S(r_\odot)$", C_SEL)] + [(f"joint_{w}", rf"$S(r_\odot)\,S(\delta)$, {w}", JOINT_COLOR[w]) for w in args.weights]
 
     fig, axes = plt.subplots(len(sims), len(cols), figsize=(2.9 * len(cols), 1.75 * len(sims) + 0.4),
