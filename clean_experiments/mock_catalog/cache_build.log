@@ -1,0 +1,16 @@
+[catalog] 47 pulsars (excluded: J0737-3039B, J1721-2457, J1946+3417, J2229+2643, J2302+4442, J2322-2650); r_s = 0.4738 kpc
+[catalog] S_delta (count weights) per band [-90. -46. -39.  -1.  27.  38.  90.]: [0.48 0.65 0.98 1.   0.75 0.73]
+[pool] 574,825 candidates (old stars within 5.0 kpc, 4,534 validation particles removed); expected pool size 3169
+[pool] trial 0: 3,200 kept | Q1 0.34  Q4 0.28  |l|<90 0.62  med|b|  24.6  r50 1.15  r75 1.67  dec bands [0.12 0.06 0.40 0.25 0.06 0.12]
+[pool] trial 1: 3,161 kept | Q1 0.35  Q4 0.26  |l|<90 0.61  med|b|  25.3  r50 1.14  r75 1.66  dec bands [0.12 0.04 0.38 0.27 0.06 0.12]
+[pool] trial 2: 3,096 kept | Q1 0.34  Q4 0.27  |l|<90 0.61  med|b|  24.8  r50 1.13  r75 1.65  dec bands [0.13 0.05 0.40 0.26 0.05 0.12]
+[pool] trial 3: 3,202 kept | Q1 0.34  Q4 0.26  |l|<90 0.60  med|b|  25.0  r50 1.12  r75 1.66  dec bands [0.11 0.05 0.40 0.27 0.07 0.11]
+[pool] trial 4: 3,179 kept | Q1 0.34  Q4 0.26  |l|<90 0.60  med|b|  24.7  r50 1.14  r75 1.66  dec bands [0.12 0.05 0.39 0.25 0.06 0.13]
+[pool] trial 5: 3,106 kept | Q1 0.34  Q4 0.27  |l|<90 0.61  med|b|  24.6  r50 1.16  r75 1.70  dec bands [0.12 0.05 0.40 0.24 0.06 0.13]
+[pool] catalog        47      | Q1 0.47  Q4 0.23  |l|<90 0.70  med|b|  20.2  r50 1.17  r75 1.67  dec bands [0.13 0.02 0.38 0.34 0.00 0.13]
+[pool] union of the 6 pools: 14,681 particles
+[truth] 14,938 query points; tree summation over 147,064,162 particles (theta=0.5)...
+[truth] done in 140 s
+[gate] frozen pool[:256] max rel diff: a 0.0e+00, u 0.0e+00; observer a 0.0e+00
+[pool] wrote /Users/pablom.perez/Desktop/Linas-group/galactoPINNs/clean_experiments/mock_catalog/cache/pool_count.npz (142 s total)
+exit 0

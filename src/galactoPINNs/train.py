@@ -3,6 +3,7 @@
 __all__ = (
     "alternate_training",
     "create_optimizer",
+    "los_residual",
     "train_model_node",
     "train_model_node_batched",
     "train_model_static",
@@ -65,6 +66,26 @@ def get_model_params(model: nnx.Module) -> dict[str, Any]:
     return nnx.to_pure_dict(state)
 
 
+def los_residual(
+    model: nnx.Module,
+    x: Array,
+    a_true: Array,
+    n_vecs: Array,
+    *,
+    x_obs: Array | None = None,
+) -> Array:
+    """Signed line-of-sight residual, prediction minus target, shape ``(N,)``.
+
+    With ``x_obs=None`` the observable is absolute, ``a(x_i) · n_i``. With an
+    observer position it is relative, ``(a(x_i) - a(x_obs)) · n_i``, and
+    ``a_true`` must then hold the relative truth ``a_i - a_obs`` (or
+    ``y_i * n_i`` for a measured scalar ``y_i``). All inputs in scaled units.
+    """
+    a_pred = model(x)["acceleration"]                               # (N, 3)
+    if x_obs is not None:
+        a_pred = a_pred - model(jnp.reshape(x_obs, (1, 3)))["acceleration"]
+    return jnp.sum(a_pred * n_vecs, axis=1) - jnp.sum(a_true * n_vecs, axis=1)
+
 #############
 
 
@@ -77,6 +98,7 @@ def train_step_static(
     *,
     n_vecs: Array | None = None,
     line_of_sight: bool = False,
+    x_obs: Array | None = None,
     los_loss: Literal["l1", "sq"] = "l1",
     lambda_rel: float = 1.0,
     importance_weight: Array | None = None,
@@ -150,6 +172,13 @@ def train_step_static(
     line_of_sight
         If ``True``, use the line-of-sight acceleration loss instead of the
         full 3D acceleration loss.
+    x_obs
+        Observer position in scaled coordinates, shape ``(3,)`` or ``(1, 3)``.
+        ``None`` (default) keeps the absolute LOS observable ``a(x_i) · n_i``.
+        When set, the residual is relative, ``(a(x_i) - a(x_obs)) · n_i``, and
+        ``a_true`` must hold the relative truth ``a_i - a_obs`` (or
+        ``y_i * n_i`` for a measured scalar ``y_i``). Requires
+        ``line_of_sight=True``.
     los_loss
         Residual form of the per-point LOS data term only — not a weighting
         mode. ``"l1"`` (default) uses ``|r|`` (median regression); ``"sq"``
@@ -238,6 +267,8 @@ def train_step_static(
         )
     if colloc_x is not None and target == "orbit_energy":
         raise ValueError("colloc_x requires an acceleration-based target.")
+    if x_obs is not None and not line_of_sight:
+        raise ValueError("x_obs (relative LOS) requires line_of_sight=True.")
 
     # ------------------------------------------------------------------
     # Training ramp helper
@@ -284,10 +315,7 @@ def train_step_static(
 
     def _acc_los_loss(ts: nnx.State) -> Array:
         m = nnx.merge(graphdef, ts, frozen_state)
-        a_pred = m(x)["acceleration"]                  # (N, 3)
-        a_los_pred = jnp.sum(a_pred * n_vecs, axis=1)  # (N,)
-        a_los_true = jnp.sum(a_true * n_vecs, axis=1)  # (N,) # Note: for synthetic data we calculate the LOS acceleration from the true acceleration and the LOS vector, for real data we just have the LOS acceleration from the beginning
-        resid = a_los_pred - a_los_true                # (N,)
+        resid = los_residual(m, x, a_true, n_vecs, x_obs=x_obs)   # (N,)
         per_point = jnp.abs(resid) if los_loss == "l1" else resid**2
         if importance_weight is not None:
             per_point = importance_weight * per_point
@@ -546,6 +574,7 @@ def train_model_static(
     *,
     n_vecs: Array | None = None,
     line_of_sight: bool = False,
+    x_obs: Array | None = None,
     los_loss: Literal["l1", "sq"] = "l1",
     importance_weight: Array | None = None,
     anchor_x: Array | None = None,
@@ -596,6 +625,13 @@ def train_model_static(
         Required when ``line_of_sight=True``.
     line_of_sight
         If ``True``, use the line-of-sight acceleration loss. Default ``False``.
+    x_obs
+        Observer position in scaled coordinates, shape ``(3,)`` or ``(1, 3)``,
+        forwarded to :func:`train_step_static`. ``None`` (default) keeps the
+        absolute LOS observable ``a(x_i) · n_i``. When set, the residual is
+        relative, ``(a(x_i) - a(x_obs)) · n_i``, and ``a_train`` must hold the
+        relative truth ``a_i - a_obs`` (or ``y_i * n_i`` for a measured scalar
+        ``y_i``). Requires ``line_of_sight=True``.
     los_loss
         Residual form of the per-point LOS data term only — not a weighting
         mode. ``"l1"`` (default) uses ``|r|`` (median regression); ``"sq"``
@@ -694,6 +730,7 @@ def train_model_static(
                 a_train,
                 n_vecs=n_vecs,
                 line_of_sight=line_of_sight,
+                x_obs=x_obs,
                 los_loss=los_loss,
                 importance_weight=importance_weight,
                 anchor_x=anchor_x,
