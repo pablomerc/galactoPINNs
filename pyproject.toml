@@ -47,6 +47,8 @@ dev = [
   "ipykernel>=7.1.0",
   "matplotlib>=3.10.8",
   "cz-conventional-gitmoji>=0.6.1",
+  "pandas>=3.0.5",
+  "scienceplots>=2.2.2",
 ]
 
 
