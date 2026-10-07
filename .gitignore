@@ -93,3 +93,8 @@ experiments/
 data/
 *.npy
 *.npz
+
+# fire_sims_v2: model checkpoints and run logs are regenerated per run (summary CSVs are tracked)
+clean_experiments/fire_sims_v2/results_*/checkpoints/
+clean_experiments/fire_sims_v2/logs/*
+!clean_experiments/fire_sims_v2/logs/.gitkeep
