@@ -74,6 +74,17 @@ def declination(l_deg, b_deg):
                                 + np.cos(_DEC_NGP) * np.cos(b) * np.cos(_L_NCP - l)))
 
 
+_RA_NGP = np.radians(192.85948)
+
+
+def equatorial(l_deg, b_deg):
+    """J2000 (RA, Dec) [deg] of Galactic (l, b) [deg]; RA in [0, 360)."""
+    l, b = np.radians(np.asarray(l_deg, float)), np.radians(np.asarray(b_deg, float))
+    ra = _RA_NGP + np.arctan2(np.cos(b) * np.sin(_L_NCP - l),
+                              np.cos(_DEC_NGP) * np.sin(b) - np.sin(_DEC_NGP) * np.cos(b) * np.cos(_L_NCP - l))
+    return np.degrees(ra) % 360.0, declination(l_deg, b_deg)
+
+
 # ----------------------------------------------------------------------------- radial part
 def radial_selection(r: np.ndarray, r_s: float) -> np.ndarray:
     """S_r(r) = exp(-r / r_s); S_r(0) = 1."""

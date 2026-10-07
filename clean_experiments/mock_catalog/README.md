@@ -15,6 +15,7 @@ depends on it.
 | `build_pool.py` | per-trial rejection sampling + pytreegrav truth labels -> `cache/pool_<sky>.npz` |
 | `draw.py` | one trial's n mock pulsars: Sun-relative LOS accelerations with catalog noise |
 | `make_figures.py` | the paper's selection-function figures + `figs/selection_stats.json` |
+| `rs_gamma_fit.ipynb` | derivation of r_s: Gamma(3, r_s) fit, alpha and truncation checks, m12i-density check |
 
 ## 1. The catalog sample (`catalog.py`)
 
@@ -47,7 +48,8 @@ One definition feeds every mock ingredient, so r_s, the noise and S_delta cannot
   `../paper_figures/sky_coverage/donlon52_refs.csv` mapped by `programs.py` there.
 
 Sample: **47 pulsars** (26 binary, 21 spin-down), r_s = mean distance / 3 =
-**0.4738 kpc**, sigma(a_LOS) median 1.51 mm/s/yr (p10/p75 0.48 / 3.16), program counts
+**0.474 ± 0.040 kpc** (see `rs_gamma_fit.ipynb`: alpha = 3 is consistent with a free fit,
+p = 0.3; the m12i old-star density instead of the r² assumption gives 0.52 ± 0.05 kpc), sigma(a_LOS) median 1.51 mm/s/yr (p10/p75 0.48 / 3.16), program counts
 NANOGrav 15 / EPTA 13 / PPTA 10 / Other 9.
 
 `uv run python clean_experiments/mock_catalog/catalog.py` prints the sample and checks
@@ -129,7 +131,13 @@ Other options: `--sky {count,rate,none}`, `--flip`, `--n-trials`, `--r-cand`,
 `--legacy-sample` (the 51-pulsar sample, for that check).
 
 With the 47-pulsar sample each trial's pool holds ~3,100-3,200 stars (union of the six:
-14,681), with median / p75 distance 1.14 / 1.67 kpc (catalog 1.17 / 1.67).
+14,681), with median / p75 distance 1.14 / 1.67 kpc (catalog 1.17 / 1.67). Every old star
+particle within 5 kpc is already a candidate, so this is the ceiling for one realization:
+an n = 2000 catalog uses ~60% of it. Realizations overlap through the particles nearest the
+observer (accepted with p close to 1): two pools share ~12% of their stars, two n = 2000
+catalogs ~8% of their pulsars (<~2% for n <= 500). Larger catalogs would need several tracers
+per particle (e.g. positions jittered within the particle's smoothing scale, with new
+truth labels).
 
 **Verified** (2026-09-28): `--sky none --legacy-sample --check-against
 experiments/repeating_with_rejectancesampling/cache/pool_rejection.npz` reproduces the
@@ -182,10 +190,17 @@ uv run python clean_experiments/mock_catalog/make_figures.py      # figs/ + PDFs
 - `selection_function`: S_r(r_sun) and S_delta(delta) (count weights; rate dashed for
   reference), with the catalog distances and declinations as rugs.
 - `selection_sampling_6panel`: p(r_sun), p(l), p(b); column A catalog vs a uniform draw of
-  the candidates, column B catalog vs the S_r S_delta sample (S_r-only dashed), with the
-  quadrant fractions.
-- `selection_sky_2d`: sky density p(l, b) of the catalog, the uniform draw, the S_r
-  sample and the S_r S_delta sample.
+  the candidates, column B catalog vs the S_r S_delta sample (S_r-only dashed). The
+  longitude panel of column B adds the uniform draw and the S_delta-only sample (n_* S_delta),
+  and vertical lines mark each distribution's peak: uniform -2.5 deg, S_r only -13 deg,
+  S_delta only +3 deg, joint +11.5 deg, catalog +30.5 deg.
+- `selection_sky_2d`: sky density p(l, b) of the catalog, the uniform draw n_*, the S_r
+  sample and the S_r S_delta sample: highest-density regions holding 40% / 90% of each
+  sample, all smoothed with the catalog's Scott's-rule kernel (44 deg in l, 16 deg in b), so
+  the ~3,200-star mocks are compared with the 47-pulsar catalog at the same resolution.
+- `selection_sky_2d_radec` (not in the paper): the same in equatorial coordinates (RA increasing leftward),
+  where S_delta is a set of horizontal bands (telescope limits dotted, Galactic plane and
+  centre marked).
 - `figs/selection_stats.json`: the numbers for the text (catalog statistics, N_k, S_delta
   per band for both weightings, quadrant fractions and |l| < 90 fraction as mean ± std over
   the 6 trials).
